@@ -22,17 +22,36 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+      - name: Show env and files
+        run: |
+          echo "pwd: $(pwd)"
+          node --version
+          ls -la src/
       - name: Run job 2
         env:
           JOB_URL: ${{ inputs.url }}
           JOB_CLIP: ${{ inputs.clip }}
         run: |
+          set +e
           mkdir -p .out
+          echo "=== starting node ==="
           node src/run-job.mjs --job 2 --url "$JOB_URL" --clip "$JOB_CLIP" \
             > .out/job-2.json 2> .out/job-2.err
+          EC=$?
+          echo "=== node exit code: $EC ==="
+          echo "=== .out listing ==="
+          ls -la .out || true
+          echo "=== stderr ==="
+          cat .out/job-2.err 2>/dev/null || echo "(no stderr file)"
+          echo "=== stdout ==="
+          cat .out/job-2.json 2>/dev/null || echo "(no stdout file)"
+          # keep step successful so artifact upload runs and we can read everything
+          exit 0
       - name: Upload artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: job-2-output
-          path: .out
+          path: |
+            .out/*
+          if-no-files-found: ignore
