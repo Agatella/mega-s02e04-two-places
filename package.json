@@ -1,0 +1,10 @@
+{
+  "name": "mega-s02e04-two-places",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Workers for MEGA.dev S02E04 two places.",
+  "engines": {
+    "node": ">=20"
+  }
+}

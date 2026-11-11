@@ -1,0 +1,38 @@
+name: job-2 voice-to-memo
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: The job-2 MCP URL (keep secret; set via -f url=...).
+        required: true
+      clip:
+        description: The clip URL the job gave us.
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Run job 2
+        env:
+          JOB_URL: ${{ inputs.url }}
+          JOB_CLIP: ${{ inputs.clip }}
+        run: |
+          mkdir -p .out
+          node src/run-job.mjs --job 2 --url "$JOB_URL" --clip "$JOB_CLIP" \
+            > .out/job-2.json 2> .out/job-2.err
+      - name: Upload artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: job-2-output
+          path: .out
