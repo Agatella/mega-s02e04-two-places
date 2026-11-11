@@ -213,39 +213,38 @@ async function runJob2(url, clipUrl) {
 	const transP = payload(
 		await callTool(url, "transcribe", { url: clipUrl }),
 	);
-	err("transcribe payload:", JSON.stringify(transP).slice(0, 600));
+	err("transcribe payload (full):", JSON.stringify(transP));
 	let token = requireStep(transP, "transcribe");
 	const segments = transP.segments ?? transP.result?.segments ?? [];
 	if (!Array.isArray(segments) || segments.length === 0) {
 		throw new Error(`no segments in transcribe result: ${JSON.stringify(transP)}`);
 	}
 
-	// Pick findings from segments: a finding is anything that happened on a
-	// line (a fault, a freeze or stall, a hold, a reset). Talk around it isn't
-	// a finding. We let a lightweight filter keep each candidate segment, then
-	// write one memo per hit. If the LLM running this script is better at
-	// classification, it can override before `memo_write` by editing the
-	// notesToWrite array.
+	// A finding is anything that happened on a line: fault, freeze/stall,
+	// hold, reset. Catch every word form; miss nothing.
 	const EVENT_RX =
-		/\b(fault|freeze|freez|froze|stall|stalled|stalling|hold|held|holding|reset|resetting|resets|drop|dropped|dropping|outage|power loss|failure|refresh.*stall|feed.*(freeze|freez|refresh|refresh.*stall)|degraded|restart|reboot)\b/i;
+		/\b(fault\w*|freez\w*|froze\w*|stall\w*|hold\w*|held|reset\w*|restart\w*|reboot\w*|drop(?:ped|ping)?|outage\w*|power\s+loss|failur\w*|degrad\w*|refresh.*stall)\b/i;
 	const notesToWrite = segments
 		.filter((s) => EVENT_RX.test(s.text ?? ""))
-		.map((s) => ({ text: (s.text ?? "").trim(), start: Number(s.start) || 0 }));
+		.map((s) => ({
+			text: (s.text ?? "").trim(),
+			at: mmssOf(s),
+		}));
 
 	err(`segments: ${segments.length}, findings: ${notesToWrite.length}`);
 	if (notesToWrite.length === 0) {
-		// Fall back: write one memo per segment so the submit still has notes.
 		err("no finding matched; falling back to one memo per segment");
 		for (const s of segments) {
-			notesToWrite.push({ text: (s.text ?? "").trim(), start: Number(s.start) || 0 });
+			notesToWrite.push({
+				text: (s.text ?? "").trim(),
+				at: mmssOf(s),
+			});
 		}
 	}
 
 	const written = [];
 	for (const n of notesToWrite) {
-		const m = Math.floor(n.start / 60);
-		const sec = Math.floor(n.start % 60).toString().padStart(2, "0");
-		const noteLine = `${n.text} @${m}:${sec}`;
+		const noteLine = `${n.text} @${n.at}`;
 		err("job 2: memo_write", noteLine);
 		const memoP = payload(
 			await callTool(url, "memo_write", { text: noteLine, step: token }),
@@ -258,13 +257,13 @@ async function runJob2(url, clipUrl) {
 	const searchP = payload(
 		await callTool(url, "memo_search", { query: "", step: token }),
 	);
-	err("memo_search payload:", JSON.stringify(searchP).slice(0, 600));
+	err("memo_search payload:", JSON.stringify(searchP));
 	token = requireStep(searchP, "memo_search");
 	const notes = searchP.notes ?? searchP.results ?? [];
 
-	const submissionLines = notes.map((n) => n.text ?? "").filter((t) => t.length > 0);
+	const submissionLines = written; // submit exactly what we wrote, one per line
 	const submitText = submissionLines.join("\n");
-	err("job 2: submit");
+	err("job 2: submit (text):\n" + submitText);
 	const submitP = payload(
 		await callTool(url, "submit", {
 			result: submitText,
@@ -272,13 +271,14 @@ async function runJob2(url, clipUrl) {
 			step: token,
 		}),
 	);
-	err("submit payload:", JSON.stringify(submitP).slice(0, 600));
+	err("submit payload:", JSON.stringify(submitP));
 
 	process.stdout.write(
 		JSON.stringify(
 			{
 				job: "job-2",
 				segments: segments.length,
+				segmentsFull: segments,
 				written,
 				notes,
 				submission: submitText,
@@ -290,6 +290,16 @@ async function runJob2(url, clipUrl) {
 			2,
 		),
 	);
+}
+
+/** Produce "m:ss" from a segment's `at` (pre-formatted) or `start` (seconds). */
+function mmssOf(s) {
+	if (typeof s?.at === "string" && /^\d{1,2}:\d{2}$/.test(s.at)) return s.at;
+	const start = Number(s?.start);
+	if (!Number.isFinite(start) || start < 0) return "0:00";
+	const m = Math.floor(start / 60);
+	const sec = Math.floor(start % 60).toString().padStart(2, "0");
+	return `${m}:${sec}`;
 }
 
 try {
